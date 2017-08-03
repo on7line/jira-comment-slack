@@ -45,6 +45,102 @@ class JiraSysLogHandler(SysLogHandler):
 def tracking():
     if request.method == 'POST':
         rd = request.get_json()
+        issue_event_type_name = rd['issue_event_type_name']
+        if 'changelog' in rd:
+            inkey = ['Attachment','Sprint','Rank']
+            from_value = rd['changelog']['items'][0]['from']
+            to_value = rd['changelog']['items'][0]['to']
+            field = rd['changelog']['items'][0]['field']
+            fromString = rd['changelog']['items'][0]['fromString']
+            toString = rd['changelog']['items'][0]['toString']
+            displayName = rd['user']['displayName']
+            event_type = issue_event_type_name
+            changed_body = "Change field:%s from:%s to:%s\n" %(field,fromString,toString)
+            slack_color = "#8FBC8F"
+            if field in inkey:
+                print("key:%s return\n" %(field))
+                data = jsonify(rd)
+                return data
+            if field == "assignee":
+                event_type = "changed assignee"
+                slack_color = "#ffeb3b" 
+                changed_body = "%s -> %s \n" % (fromString,toString)
+            if field == "resolution":
+                if toString == "Done":
+                    slack_color = "#cddc39"
+                if toString == "None":
+                    slack_color = "#3f51b5"
+                changed_body = "%s -> %s \n" % (fromString,toString)
+                event_type = "changed resolution"
+            if field == "status":
+                event_type = "changed status"
+                slack_color = "#00BFFF"
+                if toString == "In Progress":
+                    slack_color = "#2196f3"
+                if toString == "In Code Review":
+                    slack_color = "#4caf50"
+                if toString == "In Review":
+                    slack_color = "#009688"
+                if toString == "Done":
+                    slack_color ="#cddc39"
+                if toString == "To Do":
+                    slack_color = "#607d8b"
+                changed_body = "%s -> %s \n" % (fromString,toString)
+
+            task_key = rd['issue']['key']
+            task_id = rd['issue']['id']
+            task_link = str(rd['issue']['self']).replace('rest/api/2/issue', 'browse').replace(task_id, task_key)
+            task_summary = rd['issue']['fields']['summary']
+            slack_pretext = displayName + ' ' + event_type
+            slack_title = task_key + " : " + task_summary
+            slack_data = {
+                "username": "JIRA Changed ",
+                "channel": slack_channel,
+                "attachments": [
+                    {
+                        "fallback": slack_pretext + " - " + slack_title + " - " + task_link,
+                        "pretext": slack_pretext,
+                        "title": slack_title,
+                        "title_link": task_link,
+                        "text": changed_body,
+                        "color": slack_color
+                    }
+                ]
+            }
+            if slack_post:
+                post(slack_data)
+            else:
+                app.logger.warn('Slack posting was disabled by config')
+        if issue_event_type_name == 'issue_created':
+            event_type = 'Issue created'
+            changed_body = ""
+            slack_color = "#F44336" 
+
+            task_key = rd['issue']['key']
+            task_id = rd['issue']['id']
+            task_link = str(rd['issue']['self']).replace('rest/api/2/issue', 'browse').replace(task_id, task_key)
+            task_summary = rd['issue']['fields']['summary']
+            displayName = rd['user']['displayName']
+            slack_pretext = displayName + ' ' + event_type
+            slack_title = task_key + " : " + task_summary
+            slack_data = {
+                "username": "JIRA Changed ",
+                "channel": slack_channel,
+                "attachments": [
+                    {
+                        "fallback": slack_pretext + " - " + slack_title + " - " + task_link,
+                        "pretext": slack_pretext,
+                        "title": slack_title,
+                        "title_link": task_link,
+                        "text": changed_body,
+                        "color": slack_color
+                    }
+                ]
+            }
+            if slack_post:
+                post(slack_data)
+            else:
+                app.logger.warn('Slack posting was disabled by config')
         if 'comment' in rd:
             comment_body = rd['comment']['body']
             comment_author = rd['comment']['updateAuthor']['displayName']
@@ -86,19 +182,10 @@ def tracking():
                 ]
             }
             if slack_post:
-                response = requests.post(
-                    slack_url, data=json.dumps(slack_data),
-                    headers={'Content-Type': 'application/json'}
-                )
-                if response.status_code != 200:
-                    raise ValueError(
-                        'Request to slack returned an error %s, the response is:\n%s'
-                        % (response.status_code, response.text)
-                    )
+                post(slack_data)
             else:
                 app.logger.warn('Slack posting was disabled by config')
 
-            app.logger.info(comment_body)
 
         data = jsonify(rd)
         return data
@@ -106,7 +193,17 @@ def tracking():
         app.logger.info(request)
         return 'It Works!'  # Imitating Apache?
 
-
+def post(data):
+    response = requests.post(
+        slack_url, data=json.dumps(data),
+        headers={'Content-Type': 'application/json'}
+    )
+    app.logger.info(data)
+    if response.status_code != 200:
+        raise ValueError(
+            "Request to slack meets error %s, the response is:\n%s"
+            % (response.status_code, response.text)
+        )
 def main():
     if flask_logfile:
         handler = RotatingFileHandler(flask_logfile, maxBytes=10000, backupCount=1)
